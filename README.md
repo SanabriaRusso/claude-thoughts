@@ -1,92 +1,89 @@
-# Claude Code Memory Stack
+# claude-thoughts
 
-Self-hosted semantic memory for Claude Code using Qdrant + the official MCP server.
+Persistent semantic memory for Claude Code. Two backends, both on by default.
 
-## What this does
+## How it works
 
-Claude Code stores and retrieves context (architecture decisions, cross-repo knowledge,
-progress notes) in a local Qdrant vector DB via MCP. When you start a new session or
-switch repos, Claude can semantically search for relevant prior context instead of
-you re-explaining everything.
+| | memsearch | Qdrant |
+|---|-----------|--------|
+| **Role** | Per-repo auto-capture | Cross-repo global store |
+| **Capture** | Automatic (Stop hook) | Manual (MCP tool calls) |
+| **Recall** | Automatic (context injection) | Manual (MCP search) |
+| **Storage** | Markdown files + Milvus Lite | Podman volume (vector DB) |
+| **Embeddings** | ONNX bge-m3 (~558MB, local) | fastembed (~30MB, local) |
+| **Infra** | None (plugin) | Podman container |
+| **License** | MIT | Apache-2.0 |
 
-## Quick Start
+**memsearch** captures every session automatically and recalls relevant context on each prompt. **Qdrant** stores high-signal items (architecture decisions, gotchas, cross-repo knowledge) explicitly via MCP, searchable across all projects.
 
-### 1. Start Qdrant
+## Quick start
 
-```bash
-cd claude-thoughts
-podman compose up -d
-```
-
-Verify it's running: http://localhost:6333/dashboard
-
-### 2. Configure Claude Code
-
-Add the MCP server at user scope so it's available across all repos:
+### Both backends (recommended)
 
 ```bash
-claude mcp add claude-memory \
-  --scope user \
-  -- npx -y mcp-server-qdrant@latest
+# 1. Install memsearch plugin
+./memsearch/setup.sh
+
+# 2. Start Qdrant
+cd qdrant && podman compose up -d && cd ..
+./switch-backend.sh enable qdrant
 ```
 
-Then edit `~/.claude.json`, find the `claude-memory` entry, and add env vars:
+Configure the Qdrant MCP server — see [qdrant/README.md](qdrant/README.md).
 
-```json
-{
-  "mcpServers": {
-    "claude-memory": {
-      "command": "npx",
-      "args": ["-y", "mcp-server-qdrant@latest"],
-      "env": {
-        "QDRANT_URL": "http://localhost:6333",
-        "COLLECTION_NAME": "claude-memory",
-        "EMBEDDING_PROVIDER": "fastembed"
-      }
-    }
-  }
-}
-```
-
-> `fastembed` runs embeddings locally (no API key needed). It downloads a
-> small model (~30MB) on first use.
-
-### 3. Session Hooks
-
-Two hooks in `~/.claude/settings.json` automate the memory workflow:
-
-- **SessionStart** — checks if Qdrant is reachable and reminds Claude to
-  search for prior context about the current project.
-- **Stop** — fires once per session when Claude finishes, reminding it to
-  store any new decisions, gotchas, or lessons learned before the session ends.
-
-Both hooks are silent when Qdrant is not running — no errors, no noise.
-
-Scripts live in `~/.claude/hooks/`:
-- `session-start-memory.sh`
-- `session-stop-memory.sh`
-
-### 4. Use it
-
-In any Claude Code session:
-
-```
-> Before we start, check claude-memory for any prior context about our deployment pipeline
-> Store a summary of this project's architecture in claude-memory
-```
-
-## Tips
-
-- **Cross-repo context**: Prefix stored notes with `repo:<name>` and
-  `topic:<area>` so retrieval works across projects.
-- **Compaction insurance**: Before a long session hits the context limit,
-  ask Claude to summarize and store progress in memory.
-- **Data lives in**: A podman volume called `claude-thoughts_qdrant-data`.
-  Back it up with `podman volume export`.
-
-## Stopping / Cleanup
+### memsearch only
 
 ```bash
-podman compose down          # stop, keep data
-podman compose down -v       # stop and delete all stored memories
+./memsearch/setup.sh
 ```
+
+### Qdrant only
+
+```bash
+cd qdrant && podman compose up -d && cd ..
+./switch-backend.sh enable qdrant
+./switch-backend.sh disable memsearch
+```
+
+## Managing backends
+
+```bash
+./switch-backend.sh status              # show what's on
+./switch-backend.sh enable  qdrant      # turn on Qdrant
+./switch-backend.sh disable qdrant      # turn off Qdrant
+./switch-backend.sh enable  memsearch   # turn on memsearch
+./switch-backend.sh disable memsearch   # turn off memsearch
+```
+
+The switch script manages three things per backend:
+- **CLAUDE.md** — patches `~/.claude/CLAUDE.md` with the appropriate memory section (dual, single, or disabled)
+- **Qdrant hooks** — adds/removes SessionStart and Stop hooks in `~/.claude/settings.json`
+- **memsearch plugin** — enables/disables the Claude Code plugin
+
+Restart Claude Code after switching.
+
+## Structure
+
+```
+switch-backend.sh           Manage backends independently
+both/
+  CLAUDE-memory.md          Memory section for dual mode (injected into CLAUDE.md)
+qdrant/
+  compose.yaml              Podman compose for Qdrant v1.17.1
+  hooks/                    Session hooks (copied to ~/.claude/hooks/ on activation)
+  CLAUDE-memory.md          Memory section for Qdrant-only mode
+  README.md                 Qdrant setup guide
+memsearch/
+  setup.sh                  First-time installation (pip + plugin + ONNX model)
+  CLAUDE-memory.md          Memory section for memsearch-only mode
+  README.md                 memsearch setup guide
+```
+
+## What gets patched on your system
+
+| File | What changes |
+|------|-------------|
+| `~/.claude/CLAUDE.md` | Memory section between `<!-- MEMORY-BACKEND-START/END -->` markers |
+| `~/.claude/settings.json` | Qdrant hook entries under `.hooks.SessionStart` and `.hooks.Stop` |
+| `~/.claude/hooks/session-{start,stop}-memory.sh` | Copied from `qdrant/hooks/` when Qdrant is enabled |
+| memsearch plugin state | Toggled via `claude plugin enable/disable` |
