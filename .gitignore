@@ -1,3 +1,6 @@
 tasks/
 *.swp
 .DS_Store
+.memsearch/
+*.db
+.active-backend
