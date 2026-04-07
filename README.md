@@ -16,6 +16,72 @@ Persistent semantic memory for Claude Code. Two backends, both on by default.
 
 **memsearch** captures every session automatically and recalls relevant context on each prompt. **Qdrant** stores high-signal items (architecture decisions, gotchas, cross-repo knowledge) explicitly via MCP, searchable across all projects.
 
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         Claude Code Session                        │
+│                                                                     │
+│  ┌───────────────────────────────┐  ┌────────────────────────────┐  │
+│  │     memsearch (automatic)     │  │     Qdrant (manual)        │  │
+│  │         per-repo scope        │  │     cross-repo scope       │  │
+│  └──────────┬────────────────────┘  └──────────┬─────────────────┘  │
+└─────────────┼───────────────────────────────────┼───────────────────┘
+              │                                   │
+     ┌────────┴────────┐                 ┌────────┴────────┐
+     │  CAPTURE         │                │  CAPTURE         │
+     │  Stop hook       │                │  MCP tool call   │
+     │  (auto on each   │                │  (explicit by    │
+     │   response)      │                │   Claude)        │
+     └────────┬─────────┘                └────────┬─────────┘
+              │                                   │
+              │ Haiku summarizes                  │ fastembed encodes
+              │ response → bullets                │ text → vectors
+              │                                   │
+     ┌────────▼─────────┐                ┌────────▼─────────┐
+     │  STORAGE          │                │  STORAGE          │
+     │                   │                │                   │
+     │  .memsearch/      │                │  Qdrant container │
+     │  memory/          │                │  (podman)         │
+     │  YYYY-MM-DD.md    │                │                   │
+     │       +           │                │  Collection:      │
+     │  Milvus Lite      │                │  claude-memory    │
+     │  (vector index)   │                │  (vector DB)      │
+     └────────┬─────────┘                └────────┬─────────┘
+              │                                   │
+              │ bge-m3 ONNX                       │ fastembed
+              │ (~558 MB, local)                  │ (~30 MB, local)
+              │                                   │
+     ┌────────▼─────────┐                ┌────────▼─────────┐
+     │  RECALL           │                │  RECALL           │
+     │                   │                │                   │
+     │  Auto: top-3      │                │  SessionStart     │
+     │  memories injected│                │  hook: health     │
+     │  into context     │                │  check + recovery │
+     │                   │                │                   │
+     │  Manual:          │                │  Manual:          │
+     │  /memory-recall   │                │  qdrant-find      │
+     │  <query>          │                │  MCP search       │
+     └──────────────────┘                └──────────────────┘
+
+─────────────────────── Control plane ───────────────────────
+
+     ┌──────────────────────────────────────────────────┐
+     │              switch-backend.sh                    │
+     │                                                   │
+     │  Patches three things per enable/disable:         │
+     │                                                   │
+     │  1. ~/.claude/CLAUDE.md                           │
+     │     Memory instructions between markers           │
+     │                                                   │
+     │  2. ~/.claude/settings.json                       │
+     │     SessionStart + Stop hooks for Qdrant          │
+     │                                                   │
+     │  3. memsearch plugin                              │
+     │     claude plugin enable/disable                  │
+     └──────────────────────────────────────────────────┘
+```
+
 ## Quick start
 
 ### Both backends (recommended)
