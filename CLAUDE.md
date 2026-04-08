@@ -19,12 +19,13 @@ Both run simultaneously by default. `switch-backend.sh` toggles each independent
 - `qdrant/compose.yaml` — Qdrant v1.17.1 container definition
 - `qdrant/hooks/` — SessionStart (health check + auto-recovery) and Stop (mandatory store reminder)
 - `memsearch/setup.sh` — first-time install: pip package, ONNX model, Claude Code plugin
+- `memsearch/hooks/` — SessionStart hook that symlinks `.memsearch/` in worktrees to the main repo's copy
 
 ## How the switch script works
 
 It does three things per enable/disable:
 1. Replaces the memory section in `~/.claude/CLAUDE.md` between HTML comment markers
-2. Uses `jq` to add/remove Qdrant hook entries in `~/.claude/settings.json`
+2. Uses `jq` to add/remove hook entries in `~/.claude/settings.json` (Qdrant health check + memsearch worktree symlink)
 3. Calls `claude plugin enable/disable memsearch`
 
 The CLAUDE.md section it injects tells Claude how to use whichever backends are active.

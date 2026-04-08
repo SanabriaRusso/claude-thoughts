@@ -75,7 +75,7 @@ Persistent semantic memory for Claude Code. Two backends, both on by default.
      │     Memory instructions between markers           │
      │                                                   │
      │  2. ~/.claude/settings.json                       │
-     │     SessionStart + Stop hooks for Qdrant          │
+     │     SessionStart + Stop hooks (Qdrant + worktree) │
      │                                                   │
      │  3. memsearch plugin                              │
      │     claude plugin enable/disable                  │
@@ -128,6 +128,27 @@ The switch script manages three things per backend:
 
 Restart Claude Code after switching.
 
+## Worktree support
+
+memsearch stores memories in `.memsearch/` at the repo root. By default, each git worktree gets its own independent copy — meaning memories are lost when the worktree is deleted.
+
+A **SessionStart hook** solves this automatically. On every session launch, if Claude is running inside a git worktree, the hook:
+
+1. Detects the worktree by comparing `git rev-parse --git-common-dir` with the current toplevel
+2. Merges any existing local `.memsearch/memory/*.md` files into the main worktree's `.memsearch/`
+3. Replaces the local `.memsearch/` with a symlink to the main worktree's copy
+
+After this, all worktrees of a repo share one memory store. Creating and deleting worktrees freely has no effect on memory.
+
+The hook is installed automatically when memsearch is enabled:
+
+```bash
+./switch-backend.sh enable memsearch   # installs plugin + worktree hook
+./switch-backend.sh disable memsearch  # removes both
+```
+
+No manual setup needed. The hook is idempotent — it no-ops if already symlinked or if not in a worktree.
+
 ## Structure
 
 ```
@@ -141,6 +162,7 @@ qdrant/
   README.md                 Qdrant setup guide
 memsearch/
   setup.sh                  First-time installation (pip + plugin + ONNX model)
+  hooks/                    SessionStart hook for worktree symlink unification
   CLAUDE-memory.md          Memory section for memsearch-only mode
   README.md                 memsearch setup guide
 ```
@@ -152,4 +174,5 @@ memsearch/
 | `~/.claude/CLAUDE.md` | Memory section between `<!-- MEMORY-BACKEND-START/END -->` markers |
 | `~/.claude/settings.json` | Qdrant hook entries under `.hooks.SessionStart` and `.hooks.Stop` |
 | `~/.claude/hooks/session-{start,stop}-memory.sh` | Copied from `qdrant/hooks/` when Qdrant is enabled |
+| `~/.claude/hooks/session-start-memsearch-worktree.sh` | Copied from `memsearch/hooks/` when memsearch is enabled |
 | memsearch plugin state | Toggled via `claude plugin enable/disable` |

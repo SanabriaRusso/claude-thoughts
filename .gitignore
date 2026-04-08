@@ -4,3 +4,4 @@ tasks/
 .memsearch/
 *.db
 .active-backend
+.claude/worktrees/

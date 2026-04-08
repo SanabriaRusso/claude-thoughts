@@ -170,6 +170,36 @@ remove_qdrant_hooks() {
   echo "  Qdrant hooks removed."
 }
 
+install_memsearch_worktree_hook() {
+  mkdir -p "$HOME/.claude/hooks"
+  cp "$REPO_DIR/memsearch/hooks/session-start-memsearch-worktree.sh" "$HOME/.claude/hooks/"
+  chmod +x "$HOME/.claude/hooks/session-start-memsearch-worktree.sh"
+
+  local has_hook
+  has_hook=$(jq -r '.hooks.SessionStart // [] | map(.hooks[]?.command) | any(. == "~/.claude/hooks/session-start-memsearch-worktree.sh")' "$SETTINGS" 2>/dev/null || echo "false")
+
+  if [ "$has_hook" != "true" ]; then
+    jq '.hooks.SessionStart = (.hooks.SessionStart // []) + [{"hooks": [{"type": "command", "command": "~/.claude/hooks/session-start-memsearch-worktree.sh", "timeout": 10}]}]' \
+      "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"
+  fi
+
+  echo "  memsearch worktree hook installed."
+}
+
+remove_memsearch_worktree_hook() {
+  if [ ! -f "$SETTINGS" ]; then
+    return
+  fi
+
+  jq '
+    .hooks.SessionStart = [.hooks.SessionStart[]? | select(.hooks | all(.command != "~/.claude/hooks/session-start-memsearch-worktree.sh"))] |
+    if (.hooks.SessionStart | length) == 0 then del(.hooks.SessionStart) else . end |
+    if (.hooks | length) == 0 then del(.hooks) else . end
+  ' "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"
+
+  echo "  memsearch worktree hook removed."
+}
+
 manage_memsearch_plugin() {
   local action="$1"
 
@@ -256,6 +286,7 @@ case "$ACTION" in
       memsearch)
         echo "[memory] Enabling memsearch..."
         manage_memsearch_plugin "enable"
+        install_memsearch_worktree_hook
         if is_qdrant_enabled; then
           patch_claude_md "true" "true"
         else
@@ -280,6 +311,7 @@ case "$ACTION" in
       memsearch)
         echo "[memory] Disabling memsearch..."
         manage_memsearch_plugin "disable"
+        remove_memsearch_worktree_hook
         if is_qdrant_enabled; then
           patch_claude_md "true" "false"
         else
