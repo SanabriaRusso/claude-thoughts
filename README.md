@@ -1,20 +1,19 @@
 # claude-thoughts
 
-Persistent semantic memory for Claude Code. Two backends, both on by default.
+Persistent semantic memory and document retrieval for Claude Code. Two memory backends plus a RAG pipeline for ingesting reference documents.
 
 ## How it works
 
-| | memsearch | Qdrant |
-|---|-----------|--------|
-| **Role** | Per-repo auto-capture | Cross-repo global store |
-| **Capture** | Automatic (Stop hook) | Manual (MCP tool calls) |
-| **Recall** | Automatic (context injection) | Manual (MCP search) |
-| **Storage** | Markdown files + Milvus Lite | Podman volume (vector DB) |
-| **Embeddings** | ONNX bge-m3 (~558MB, local) | fastembed (~30MB, local) |
-| **Infra** | None (plugin) | Podman container |
-| **License** | MIT | Apache-2.0 |
+| | memsearch | Qdrant | RAG |
+|---|-----------|--------|-----|
+| **Role** | Per-repo auto-capture | Cross-repo global store | Document retrieval |
+| **Capture** | Automatic (Stop hook) | Manual (MCP tool calls) | CLI ingestion |
+| **Recall** | Automatic (context injection) | Manual (MCP search) | Manual (MCP search) |
+| **Storage** | Markdown files + Milvus Lite | Podman volume (vector DB) | Podman volume (vector DB) |
+| **Embeddings** | ONNX bge-m3 (~558MB, local) | fastembed MiniLM (~30MB, local) | fastembed nomic-embed (768d, local) |
+| **Infra** | None (plugin) | Podman container | Podman container (shared Qdrant) |
 
-**memsearch** captures every session automatically and recalls relevant context on each prompt. **Qdrant** stores high-signal items (architecture decisions, gotchas, cross-repo knowledge) explicitly via MCP, searchable across all projects.
+**memsearch** captures every session automatically and recalls relevant context on each prompt. **Qdrant** stores high-signal items (architecture decisions, gotchas, cross-repo knowledge) explicitly via MCP, searchable across all projects. **RAG** makes ingested reference documents (books, papers, guides) searchable — see [rag/README.md](rag/README.md).
 
 ## Architecture
 
@@ -79,6 +78,9 @@ Persistent semantic memory for Claude Code. Two backends, both on by default.
      │                                                   │
      │  3. memsearch plugin                              │
      │     claude plugin enable/disable                  │
+     │                                                   │
+     │  4. ~/.claude.json (RAG only)                     │
+     │     MCP server "claude-rag" entry                 │
      └──────────────────────────────────────────────────┘
 ```
 
@@ -96,6 +98,16 @@ cd qdrant && podman compose up -d && cd ..
 ```
 
 Configure the Qdrant MCP server — see [qdrant/README.md](qdrant/README.md).
+
+### Add document RAG
+
+```bash
+# Requires Qdrant to be running (see above)
+./rag/setup.sh
+./rag/ingest add ~/books/my-book.pdf --title "Book Title" --topic "subject"
+```
+
+See [rag/README.md](rag/README.md) for details.
 
 ### memsearch only
 
@@ -115,16 +127,19 @@ cd qdrant && podman compose up -d && cd ..
 
 ```bash
 ./switch-backend.sh status              # show what's on
-./switch-backend.sh enable  qdrant      # turn on Qdrant
-./switch-backend.sh disable qdrant      # turn off Qdrant
+./switch-backend.sh enable  qdrant      # turn on Qdrant memory
+./switch-backend.sh disable qdrant      # turn off Qdrant memory
 ./switch-backend.sh enable  memsearch   # turn on memsearch
 ./switch-backend.sh disable memsearch   # turn off memsearch
+./switch-backend.sh enable  rag         # turn on document RAG
+./switch-backend.sh disable rag         # turn off document RAG
 ```
 
-The switch script manages three things per backend:
-- **CLAUDE.md** — patches `~/.claude/CLAUDE.md` with the appropriate memory section (dual, single, or disabled)
+The switch script manages per backend:
+- **CLAUDE.md** — patches `~/.claude/CLAUDE.md` with the appropriate instructions
 - **Qdrant hooks** — adds/removes SessionStart and Stop hooks in `~/.claude/settings.json`
 - **memsearch plugin** — enables/disables the Claude Code plugin
+- **RAG MCP server** — adds/removes `claude-rag` entry in `~/.claude.json`
 
 Restart Claude Code after switching.
 
@@ -165,6 +180,14 @@ memsearch/
   hooks/                    SessionStart hook for worktree symlink unification
   CLAUDE-memory.md          Memory section for memsearch-only mode
   README.md                 memsearch setup guide
+rag/
+  ingest                    CLI wrapper (containerized ingestion)
+  ingest.py                 Ingestion pipeline (runs inside container)
+  Containerfile             Container image definition
+  requirements.txt          Python dependencies
+  setup.sh                  Build image + enable backend
+  CLAUDE-rag.md             RAG instructions (injected into CLAUDE.md)
+  README.md                 RAG documentation
 ```
 
 ## What gets patched on your system
@@ -172,7 +195,9 @@ memsearch/
 | File | What changes |
 |------|-------------|
 | `~/.claude/CLAUDE.md` | Memory section between `<!-- MEMORY-BACKEND-START/END -->` markers |
+| `~/.claude/CLAUDE.md` | RAG section between `<!-- RAG-BACKEND-START/END -->` markers |
 | `~/.claude/settings.json` | Qdrant hook entries under `.hooks.SessionStart` and `.hooks.Stop` |
 | `~/.claude/hooks/session-{start,stop}-memory.sh` | Copied from `qdrant/hooks/` when Qdrant is enabled |
 | `~/.claude/hooks/session-start-memsearch-worktree.sh` | Copied from `memsearch/hooks/` when memsearch is enabled |
+| `~/.claude.json` | `claude-rag` MCP server entry (when RAG is enabled) |
 | memsearch plugin state | Toggled via `claude plugin enable/disable` |

@@ -1,0 +1,49 @@
+#!/bin/bash
+set -euo pipefail
+
+# ingest — Containerized document ingestion CLI for Claude Code RAG.
+#
+# Usage:
+#   ./rag/ingest add <file> --title "Title" --topic "subject"
+#   ./rag/ingest list
+#   ./rag/ingest delete --title "Title"
+#
+# The first run builds the image and downloads the embedding model (~270MB).
+
+IMAGE="claude-rag-ingest"
+CACHE_VOLUME="claude-rag-cache"
+
+# Build image if it doesn't exist
+if ! podman image exists "$IMAGE" 2>/dev/null; then
+  echo "[rag] Building container image (first time only)..."
+  podman build -t "$IMAGE" -f "$(dirname "$0")/Containerfile" "$(dirname "$0")"
+fi
+
+# Ensure model cache volume exists
+podman volume exists "$CACHE_VOLUME" 2>/dev/null || podman volume create "$CACHE_VOLUME" >/dev/null
+
+# Base podman run args:
+#   --rm         : clean up after run
+#   --network host : access Qdrant (6333) and Ollama (11434) on host
+#   -v cache     : persist embedding model downloads across runs
+RUN_ARGS=(
+  --rm
+  --network host
+  -v "${CACHE_VOLUME}:/root/.cache"
+)
+
+# If first arg is "add", mount the document file into the container
+if [ "${1:-}" = "add" ] && [ -n "${2:-}" ]; then
+  FILE="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
+  if [ ! -f "$FILE" ]; then
+    echo "Error: $FILE not found" >&2
+    exit 1
+  fi
+  MOUNT_DIR="$(dirname "$FILE")"
+  FILENAME="$(basename "$FILE")"
+  RUN_ARGS+=(-v "$MOUNT_DIR:/data:ro")
+  shift 2
+  exec podman run "${RUN_ARGS[@]}" "$IMAGE" add "/data/$FILENAME" "$@"
+else
+  exec podman run "${RUN_ARGS[@]}" "$IMAGE" "$@"
+fi
