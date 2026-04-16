@@ -7,17 +7,24 @@ by Claude Code's MCP-based qdrant-find tool.
 """
 
 import argparse
+import os
 import re
 import sys
+import time
+import warnings
 from pathlib import Path
 
+# Suppress noisy runtime warnings before any imports trigger them
+os.environ.setdefault("ORT_LOG_LEVEL", "3")  # onnxruntime: ERROR only
+os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")  # no auth nag
+warnings.filterwarnings("ignore", message=r".*`add` method has been deprecated.*")
+
 import httpx
+from tqdm import tqdm
 from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 # ── Configuration ──────────────────────────────────────────────────────────
-
-import os
 
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 COLLECTION_NAME = "claude-rag"
@@ -293,15 +300,12 @@ def contextualize_chunks(chunks, model=OLLAMA_MODEL):
             chunk["contextualized"] = False
         return
 
-    print(f"  Contextualizing with Ollama ({model})...")
-    for i, chunk in enumerate(chunks):
+    for i, chunk in enumerate(tqdm(chunks, desc="Contextualizing", unit="chunk", file=sys.stdout)):
         prev_text = chunks[i - 1]["text"] if i > 0 else None
         next_text = chunks[i + 1]["text"] if i < len(chunks) - 1 else None
         original_text = chunk["text"]
         chunk["text"] = contextualize_chunk(original_text, chunk["chapter"], prev_text, next_text, model)
         chunk["contextualized"] = chunk["text"] != original_text
-        if (i + 1) % 10 == 0 or i + 1 == len(chunks):
-            print(f"    {i + 1}/{len(chunks)}")
 
 
 # ── Qdrant Operations ─────────────────────────────────────────────────────
@@ -385,28 +389,38 @@ def cmd_add(args):
     # Uses qdrant-client's built-in fastembed integration (client.add).
     # This auto-creates the collection with the correct named vector config
     # matching what mcp-server-qdrant expects for the same embedding model.
-    print("Embedding and storing in Qdrant...")
     total_chunks = len(chunks)
-    client.add(
-        collection_name=COLLECTION_NAME,
-        documents=[c["text"] for c in chunks],
-        metadata=[
-            {
-                "source": args.title,
-                "topic": args.topic,
-                "chapter": c["chapter"],
-                "page": c.get("page"),
-                "chunk_index": i,
-                "total_chunks": total_chunks,
-                "contextualized": c.get("contextualized", False),
-            }
-            for i, c in enumerate(chunks)
-        ],
-        batch_size=100,
-    )
+    batch_size = 100
+    num_batches = (total_chunks + batch_size - 1) // batch_size
+
+    documents = [c["text"] for c in chunks]
+    metadatas = [
+        {
+            "source": args.title,
+            "topic": args.topic,
+            "chapter": c["chapter"],
+            "page": c.get("page"),
+            "chunk_index": i,
+            "total_chunks": total_chunks,
+            "contextualized": c.get("contextualized", False),
+        }
+        for i, c in enumerate(chunks)
+    ]
+
+    t0 = time.time()
+    for batch_idx in tqdm(range(num_batches), desc="Embedding & storing", unit="batch", file=sys.stdout):
+        start = batch_idx * batch_size
+        end = min(start + batch_size, total_chunks)
+        client.add(
+            collection_name=COLLECTION_NAME,
+            documents=documents[start:end],
+            metadata=metadatas[start:end],
+            batch_size=batch_size,
+        )
+    elapsed = time.time() - t0
 
     ctx_count = sum(1 for c in chunks if c.get("contextualized"))
-    print(f"\nDone! {total_chunks} chunks stored in '{COLLECTION_NAME}'.")
+    print(f"\nDone! {total_chunks} chunks stored in '{COLLECTION_NAME}' ({elapsed:.1f}s)")
     print(f"  Document: {args.title}")
     print(f"  Topic:    {args.topic}")
     print(f"  Contextualized: {ctx_count}/{total_chunks} chunks")

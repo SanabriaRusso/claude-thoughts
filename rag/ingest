@@ -40,6 +40,14 @@ RUN_ARGS=(
   -e "OLLAMA_URL=${OLLAMA_HOST}"
 )
 
+# Filter noisy C++ runtime warnings from stderr while preserving tqdm output.
+# onnxruntime cpuid/GPU warnings fire at library load before any Python runs.
+run_filtered() {
+  podman run "${RUN_ARGS[@]}" "$IMAGE" "$@" \
+    2> >(grep -v -E "onnxruntime cpuid|device_discovery|unauthenticated requests" >&2)
+  return "${PIPESTATUS[0]:-$?}"
+}
+
 # If first arg is "add", mount the document file into the container
 if [ "${1:-}" = "add" ] && [ -n "${2:-}" ]; then
   FILE="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
@@ -51,7 +59,7 @@ if [ "${1:-}" = "add" ] && [ -n "${2:-}" ]; then
   FILENAME="$(basename "$FILE")"
   RUN_ARGS+=(-v "$MOUNT_DIR:/data:ro")
   shift 2
-  exec podman run "${RUN_ARGS[@]}" "$IMAGE" add "/data/$FILENAME" "$@"
+  run_filtered add "/data/$FILENAME" "$@"
 else
-  exec podman run "${RUN_ARGS[@]}" "$IMAGE" "$@"
+  run_filtered "$@"
 fi

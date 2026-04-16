@@ -1,5 +1,10 @@
 FROM python:3.13-slim
 
+# Suppress onnxruntime C++ warnings (must be set before library loads)
+ENV ORT_LOG_LEVEL=3
+# Suppress HuggingFace unauthenticated request nag
+ENV HF_HUB_DISABLE_IMPLICIT_TOKEN=1
+
 WORKDIR /app
 
 COPY requirements.txt .
@@ -7,4 +12,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY ingest.py .
 
-ENTRYPOINT ["python", "ingest.py"]
+ENTRYPOINT ["python", "-W", "ignore::UserWarning", "ingest.py"]
