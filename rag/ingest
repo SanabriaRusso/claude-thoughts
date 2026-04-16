@@ -22,14 +22,22 @@ fi
 # Ensure model cache volume exists
 podman volume exists "$CACHE_VOLUME" 2>/dev/null || podman volume create "$CACHE_VOLUME" >/dev/null
 
+# On macOS, Podman containers run in a Linux VM. "localhost" inside the
+# container reaches the VM, not the Mac. Ollama runs on the Mac, so we
+# use host.containers.internal to reach it. Qdrant also runs in Podman
+# so localhost works for it via port mapping on the VM.
+OLLAMA_HOST="${OLLAMA_URL:-http://host.containers.internal:11434}"
+
 # Base podman run args:
 #   --rm         : clean up after run
-#   --network host : access Qdrant (6333) and Ollama (11434) on host
+#   --network host : access Qdrant (6333) on the VM's localhost
 #   -v cache     : persist embedding model downloads across runs
+#   -e OLLAMA_URL: route to host's Ollama via podman gateway
 RUN_ARGS=(
   --rm
   --network host
   -v "${CACHE_VOLUME}:/root/.cache"
+  -e "OLLAMA_URL=${OLLAMA_HOST}"
 )
 
 # If first arg is "add", mount the document file into the container

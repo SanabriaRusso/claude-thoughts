@@ -17,11 +17,13 @@ from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 # ── Configuration ──────────────────────────────────────────────────────────
 
-QDRANT_URL = "http://localhost:6333"
+import os
+
+QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 COLLECTION_NAME = "claude-rag"
 EMBEDDING_MODEL = "nomic-ai/nomic-embed-text-v1.5"
-OLLAMA_URL = "http://localhost:11434"
-OLLAMA_MODEL = "gemma3:4b"
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:4b")
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 
