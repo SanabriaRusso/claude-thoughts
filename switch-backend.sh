@@ -4,24 +4,27 @@ set -euo pipefail
 # switch-backend.sh — Enable/disable memory backends independently.
 #
 # Usage:
-#   ./switch-backend.sh enable  <qdrant|memsearch>
-#   ./switch-backend.sh disable <qdrant|memsearch>
+#   ./switch-backend.sh enable  <qdrant|memsearch|rag>
+#   ./switch-backend.sh disable <qdrant|memsearch|rag>
 #   ./switch-backend.sh status
 #
-# Both backends can run simultaneously (default). Disable individually as needed.
+# All backends can run simultaneously. Disable individually as needed.
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 CLAUDE_MD="$HOME/.claude/CLAUDE.md"
 SETTINGS="$HOME/.claude/settings.json"
+CLAUDE_JSON="$HOME/.claude.json"
 
 START_MARKER="<!-- MEMORY-BACKEND-START -->"
 END_MARKER="<!-- MEMORY-BACKEND-END -->"
+RAG_START_MARKER="<!-- RAG-BACKEND-START -->"
+RAG_END_MARKER="<!-- RAG-BACKEND-END -->"
 
 ACTION="${1:-}"
 BACKEND="${2:-}"
 
 usage() {
-  echo "Usage: $0 <enable|disable> <qdrant|memsearch>"
+  echo "Usage: $0 <enable|disable> <qdrant|memsearch|rag>"
   echo "       $0 status"
   echo ""
   echo "Manage Claude Code memory backends independently."
@@ -29,6 +32,8 @@ usage() {
   echo "  disable qdrant     — Remove Qdrant hooks"
   echo "  enable  memsearch  — Enable memsearch plugin (per-repo auto-capture)"
   echo "  disable memsearch  — Disable memsearch plugin"
+  echo "  enable  rag        — Add RAG MCP server (document retrieval)"
+  echo "  disable rag        — Remove RAG MCP server"
   echo "  status             — Show which backends are active"
   exit 1
 }
@@ -235,6 +240,94 @@ manage_memsearch_plugin() {
   fi
 }
 
+# ─── RAG backend ───────────────────────────────────────────────────────────
+
+ensure_rag_markers() {
+  if ! grep -q "$RAG_START_MARKER" "$CLAUDE_MD" 2>/dev/null; then
+    echo "  Adding RAG section markers to $CLAUDE_MD..."
+    # Append RAG markers at end of file
+    printf "\n\n%s\n%s\n" "$RAG_START_MARKER" "$RAG_END_MARKER" >> "$CLAUDE_MD"
+  fi
+}
+
+replace_rag_section() {
+  local source_file="$1"
+  ensure_rag_markers
+
+  local start_line end_line total_lines
+  start_line=$(grep -n "$RAG_START_MARKER" "$CLAUDE_MD" | head -1 | cut -d: -f1)
+  end_line=$(grep -n "$RAG_END_MARKER" "$CLAUDE_MD" | head -1 | cut -d: -f1)
+  total_lines=$(wc -l < "$CLAUDE_MD")
+
+  {
+    if [ "$start_line" -gt 1 ]; then
+      head -n "$((start_line - 1))" "$CLAUDE_MD"
+    fi
+    cat "$source_file"
+    if [ "$end_line" -lt "$total_lines" ]; then
+      tail -n "+$((end_line + 1))" "$CLAUDE_MD"
+    fi
+  } > "${CLAUDE_MD}.tmp" && mv "${CLAUDE_MD}.tmp" "$CLAUDE_MD"
+}
+
+clear_rag_section() {
+  ensure_rag_markers
+
+  local start_line end_line total_lines
+  start_line=$(grep -n "$RAG_START_MARKER" "$CLAUDE_MD" | head -1 | cut -d: -f1)
+  end_line=$(grep -n "$RAG_END_MARKER" "$CLAUDE_MD" | head -1 | cut -d: -f1)
+  total_lines=$(wc -l < "$CLAUDE_MD")
+
+  {
+    if [ "$start_line" -gt 1 ]; then
+      head -n "$((start_line - 1))" "$CLAUDE_MD"
+    fi
+    echo "$RAG_START_MARKER"
+    echo "$RAG_END_MARKER"
+    if [ "$end_line" -lt "$total_lines" ]; then
+      tail -n "+$((end_line + 1))" "$CLAUDE_MD"
+    fi
+  } > "${CLAUDE_MD}.tmp" && mv "${CLAUDE_MD}.tmp" "$CLAUDE_MD"
+}
+
+install_rag_mcp() {
+  if [ ! -f "$CLAUDE_JSON" ]; then
+    echo '{}' > "$CLAUDE_JSON"
+  fi
+
+  local has_rag
+  has_rag=$(jq -r '.mcpServers["claude-rag"] // empty' "$CLAUDE_JSON" 2>/dev/null)
+
+  if [ -z "$has_rag" ]; then
+    jq '.mcpServers["claude-rag"] = {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["--python", "3.13", "mcp-server-qdrant"],
+      "env": {
+        "QDRANT_URL": "http://localhost:6333",
+        "COLLECTION_NAME": "claude-rag",
+        "EMBEDDING_PROVIDER": "fastembed",
+        "EMBEDDING_MODEL": "nomic-ai/nomic-embed-text-v1.5",
+        "QDRANT_READ_ONLY": "true",
+        "QDRANT_SEARCH_LIMIT": "5",
+        "TOOL_STORE_DESCRIPTION": "Not used — documents are ingested via the CLI tool.",
+        "TOOL_FIND_DESCRIPTION": "Search ingested reference documents (books, papers, technical guides) for relevant knowledge. Use when the user asks about a subject covered by ingested materials, or when you need domain-specific knowledge beyond your training data."
+      }
+    }' "$CLAUDE_JSON" > "${CLAUDE_JSON}.tmp" && mv "${CLAUDE_JSON}.tmp" "$CLAUDE_JSON"
+  fi
+
+  echo "  RAG MCP server installed."
+}
+
+remove_rag_mcp() {
+  if [ ! -f "$CLAUDE_JSON" ]; then
+    return
+  fi
+
+  jq 'del(.mcpServers["claude-rag"])' "$CLAUDE_JSON" > "${CLAUDE_JSON}.tmp" && mv "${CLAUDE_JSON}.tmp" "$CLAUDE_JSON"
+  echo "  RAG MCP server removed."
+}
+
 # ─── Status detection ───────────────────────────────────────────────────────
 
 is_qdrant_enabled() {
@@ -245,6 +338,11 @@ is_qdrant_enabled() {
 is_memsearch_enabled() {
   [ -f "$SETTINGS" ] && \
   jq -e '.enabledPlugins["memsearch@memsearch-plugins"] == true' "$SETTINGS" >/dev/null 2>&1
+}
+
+is_rag_enabled() {
+  [ -f "$CLAUDE_JSON" ] && \
+  jq -e '.mcpServers["claude-rag"] != null' "$CLAUDE_JSON" >/dev/null 2>&1
 }
 
 show_status() {
@@ -259,6 +357,11 @@ show_status() {
     echo "  memsearch: ON  (per-repo, automatic via plugin)"
   else
     echo "  memsearch: OFF"
+  fi
+  if is_rag_enabled; then
+    echo "  rag:       ON  (document retrieval via MCP)"
+  else
+    echo "  rag:       OFF"
   fi
   echo ""
 }
@@ -293,6 +396,12 @@ case "$ACTION" in
           patch_claude_md "false" "true"
         fi
         ;;
+      rag)
+        echo "[rag] Enabling RAG..."
+        install_rag_mcp
+        replace_rag_section "$REPO_DIR/rag/CLAUDE-rag.md"
+        echo "  CLAUDE.md RAG section patched."
+        ;;
       *) usage ;;
     esac
     ;;
@@ -317,6 +426,12 @@ case "$ACTION" in
         else
           patch_claude_md "false" "false"
         fi
+        ;;
+      rag)
+        echo "[rag] Disabling RAG..."
+        remove_rag_mcp
+        clear_rag_section
+        echo "  CLAUDE.md RAG section cleared."
         ;;
       *) usage ;;
     esac

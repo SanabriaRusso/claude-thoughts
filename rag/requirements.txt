@@ -1,0 +1,6 @@
+fastembed
+qdrant-client
+pymupdf
+ebooklib
+beautifulsoup4
+httpx
