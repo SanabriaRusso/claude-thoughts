@@ -139,8 +139,10 @@ install_qdrant_hooks() {
   mkdir -p "$HOME/.claude/hooks"
   cp "$REPO_DIR/qdrant/hooks/session-start-memory.sh" "$HOME/.claude/hooks/"
   cp "$REPO_DIR/qdrant/hooks/session-stop-memory.sh" "$HOME/.claude/hooks/"
+  cp "$REPO_DIR/qdrant/hooks/snapshot-qdrant.sh" "$HOME/.claude/hooks/"
   chmod +x "$HOME/.claude/hooks/session-start-memory.sh"
   chmod +x "$HOME/.claude/hooks/session-stop-memory.sh"
+  chmod +x "$HOME/.claude/hooks/snapshot-qdrant.sh"
 
   local has_start has_stop
   has_start=$(jq -r '.hooks.SessionStart // [] | map(.hooks[]?.command) | any(. == "~/.claude/hooks/session-start-memory.sh")' "$SETTINGS" 2>/dev/null || echo "false")
@@ -350,6 +352,8 @@ show_status() {
   echo ""
   if is_qdrant_enabled; then
     echo "  qdrant:    ON  (cross-repo, manual via MCP)"
+    echo "    snapshots: ON by default → ~/qdrant-dumps/ (keep 3)"
+    echo "               disable with: export QDRANT_SNAPSHOTS_ENABLED=0 in your shell rc"
   else
     echo "  qdrant:    OFF"
   fi
