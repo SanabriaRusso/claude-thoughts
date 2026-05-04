@@ -177,6 +177,29 @@ remove_qdrant_hooks() {
   echo "  Qdrant hooks removed."
 }
 
+install_wrap_session_skill() {
+  local src="$REPO_DIR/skills/wrap-session"
+  local dest="$HOME/.claude/skills/wrap-session"
+
+  if [ ! -d "$src" ]; then
+    echo "  WARNING: $src not found — skipping wrap-session skill install."
+    return
+  fi
+
+  mkdir -p "$HOME/.claude/skills"
+  rm -rf "$dest"
+  cp -R "$src" "$dest"
+  echo "  wrap-session skill installed (snapshot)."
+}
+
+remove_wrap_session_skill() {
+  local dest="$HOME/.claude/skills/wrap-session"
+  if [ -d "$dest" ] || [ -L "$dest" ]; then
+    rm -rf "$dest"
+    echo "  wrap-session skill removed."
+  fi
+}
+
 install_memsearch_worktree_hook() {
   mkdir -p "$HOME/.claude/hooks"
   cp "$REPO_DIR/memsearch/hooks/session-start-memsearch-worktree.sh" "$HOME/.claude/hooks/"
@@ -354,6 +377,11 @@ show_status() {
     echo "  qdrant:    ON  (cross-repo, manual via MCP)"
     echo "    snapshots: ON by default → ~/qdrant-dumps/ (keep 3)"
     echo "               disable with: export QDRANT_SNAPSHOTS_ENABLED=0 in your shell rc"
+    if [ -d "$HOME/.claude/skills/wrap-session" ]; then
+      echo "    wrap-session skill: installed → invoke /wrap-session before quitting"
+    else
+      echo "    wrap-session skill: MISSING (re-run: $0 enable qdrant)"
+    fi
   else
     echo "  qdrant:    OFF"
   fi
@@ -383,6 +411,7 @@ case "$ACTION" in
       qdrant)
         echo "[memory] Enabling Qdrant..."
         install_qdrant_hooks
+        install_wrap_session_skill
         # Determine memsearch state for CLAUDE.md
         if is_memsearch_enabled; then
           patch_claude_md "true" "true"
@@ -415,6 +444,7 @@ case "$ACTION" in
       qdrant)
         echo "[memory] Disabling Qdrant..."
         remove_qdrant_hooks
+        remove_wrap_session_skill
         if is_memsearch_enabled; then
           patch_claude_md "false" "true"
         else
