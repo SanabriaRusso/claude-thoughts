@@ -6,8 +6,10 @@ IMPORTANT: You MUST use `mcp__claude-memory__qdrant-store` to persist knowledge 
 - Search claude-memory MCP with relevant keywords, `repo:<name>`, and `topic:<area>` tags
 - Use findings to inform your approach and avoid repeating past mistakes
 
-### Before ending ANY session (when you receive the Stop hook or are about to give your final response)
-You MUST call `mcp__claude-memory__qdrant-store` for each of the following that apply:
+### Before ending ANY session
+**Canonical path: the user runs `/wrap-session`** — that skill surveys the conversation, dedupes against existing memories, and stores each high-signal item with the correct metadata. If the user has invoked `/wrap-session` in this session, you do not need to additionally call `mcp__claude-memory__qdrant-store` manually.
+
+If `/wrap-session` was NOT run (e.g. you receive the Stop hook directly), you MUST still call `mcp__claude-memory__qdrant-store` for each of the following that apply:
 - Architecture decisions made or discussed
 - Gotchas, bugs, or non-obvious behaviors discovered
 - Lessons learned from corrections or failed approaches

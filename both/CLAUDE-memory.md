@@ -21,7 +21,8 @@ Two memory backends are active. Use both — they serve different purposes.
 
 ### Before ending a session
 - memsearch auto-captures — no action needed for per-repo context
-- For cross-repo knowledge or major decisions, call `mcp__claude-memory__qdrant-store` with repo/topic metadata
+- **Canonical path: run `/wrap-session`** — surveys the conversation, dedupes, and stores high-signal items to Qdrant deterministically with `{repo, topic}` metadata
+- The Stop-hook reminder remains as a fallback for sessions where you forget to run `/wrap-session`
 - If Qdrant is unreachable, skip it — memsearch still captures locally
 
 ### If memsearch is not capturing

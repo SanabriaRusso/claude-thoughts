@@ -143,6 +143,29 @@ The switch script manages per backend:
 
 Restart Claude Code after switching.
 
+## `/wrap-session` skill
+
+The Stop hook emits a *reminder* to store memories before quitting, but reminders are best-effort — Claude may have already decided to stop by the time the hook fires, and the structure/metadata of what gets stored varies session-to-session.
+
+`/wrap-session` is the deterministic, user-triggered counterpart. Invoke it explicitly **before quitting** any session in any repo:
+
+```
+/wrap-session
+```
+
+What it does:
+1. Detects the current repo via `git rev-parse --show-toplevel` and uses the basename as the `repo` tag.
+2. Verifies Qdrant is reachable (aborts with a clear message if not — memsearch still captures locally).
+3. Surveys the conversation for architecture decisions, gotchas, lessons, integration points, and standing project context.
+4. Deduplicates each candidate against existing memories via `mcp__claude-memory__qdrant-find`.
+5. Stores each kept item via `mcp__claude-memory__qdrant-store` with mandatory `{repo, topic}` metadata.
+6. Falls back to a single session-summary memory if nothing high-signal happened.
+7. Reports a compact summary table of what was stored and what was skipped as duplicate.
+
+The skill ships in this repo at `skills/wrap-session/SKILL.md` and is installed as a snapshot to `~/.claude/skills/wrap-session/` whenever Qdrant is enabled. Re-run `./switch-backend.sh enable qdrant` after editing the skill to refresh the deployed copy.
+
+The Stop-hook reminder remains active as a fallback for sessions where you forget to run `/wrap-session`.
+
 ## Worktree support
 
 memsearch stores memories in `.memsearch/` at the repo root. By default, each git worktree gets its own independent copy — meaning memories are lost when the worktree is deleted.
@@ -180,6 +203,9 @@ memsearch/
   hooks/                    SessionStart hook for worktree symlink unification
   CLAUDE-memory.md          Memory section for memsearch-only mode
   README.md                 memsearch setup guide
+skills/
+  wrap-session/
+    SKILL.md                User-invocable /wrap-session — persists high-signal items to Qdrant before quitting (deployed to ~/.claude/skills/ when Qdrant is enabled)
 rag/
   ingest                    CLI wrapper (containerized ingestion)
   ingest.py                 Ingestion pipeline (runs inside container)
@@ -199,5 +225,6 @@ rag/
 | `~/.claude/settings.json` | Qdrant hook entries under `.hooks.SessionStart` and `.hooks.Stop` |
 | `~/.claude/hooks/session-{start,stop}-memory.sh` | Copied from `qdrant/hooks/` when Qdrant is enabled |
 | `~/.claude/hooks/session-start-memsearch-worktree.sh` | Copied from `memsearch/hooks/` when memsearch is enabled |
+| `~/.claude/skills/wrap-session/` | Snapshot of `skills/wrap-session/` copied here when Qdrant is enabled |
 | `~/.claude.json` | `claude-rag` MCP server entry (when RAG is enabled) |
 | memsearch plugin state | Toggled via `claude plugin enable/disable` |
