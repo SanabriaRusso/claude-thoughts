@@ -11,9 +11,16 @@ You have been asked to wrap up the session by persisting high-signal knowledge f
 
 ## Step 1: Preflight
 
-1. Detect the current repo:
-   - Run `git rev-parse --show-toplevel` to get the repo root.
-   - Take the basename as `<repo-name>` (e.g. `/Users/foo/github/my-project` → `my-project`).
+1. Detect the current repo (must work correctly from git worktrees):
+   - Run `git rev-parse --git-common-dir`. This always points at the **main repo's** `.git` directory regardless of whether you're in a worktree (in a worktree, `--show-toplevel` would return the worktree path and yield the wrong basename).
+   - Take `basename(dirname(<git-common-dir>))` as `<repo-name>`. In bash:
+     ```bash
+     repo_name=$(basename "$(dirname "$(cd "$(git rev-parse --git-common-dir)" && pwd)")")
+     ```
+   - Example from a worktree at `/Users/foo/claude-thoughts/.claude/worktrees/skills/`:
+     - `--git-common-dir` → `/Users/foo/claude-thoughts/.git`
+     - `dirname` → `/Users/foo/claude-thoughts`
+     - `basename` → `claude-thoughts` ✓ (not `skills`)
    - If not in a git repo, ask the user for a `repo` tag to use, or abort.
 2. Check Qdrant is reachable: `curl -sf http://localhost:6333/healthz`.
    - If it fails, abort with a clear message: "Qdrant is down — memories cannot be stored. memsearch (per-repo) has still captured locally. Run `~/github/claude-thoughts/switch-backend.sh status` or restart the container, then re-invoke /wrap-session."
