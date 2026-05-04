@@ -70,8 +70,20 @@ In any Claude Code session:
 ## Data
 
 - **Volume**: `claude-thoughts_qdrant-data` (podman named volume)
-- **Backup**: `podman volume export claude-thoughts_qdrant-data > backup.tar`
 - **Ports**: `127.0.0.1:6333` (REST), `127.0.0.1:6334` (gRPC)
+
+### Snapshots
+
+The Stop hook automatically dumps every collection to `~/qdrant-dumps/claude-memory-<TS>/`
+after each session, keeping the 3 most recent runs. This protects against podman machine
+resets that would otherwise wipe `qdrant-data`.
+
+- **Opt out**: `export QDRANT_SNAPSHOTS_ENABLED=0`
+- **Tunables**: `QDRANT_DUMP_DIR`, `QDRANT_DUMP_KEEP`
+- **Log**: `~/qdrant-dumps/.snapshot.log`
+- **Restore**: see [RESTORE.md](RESTORE.md)
+
+For a full volume export instead: `podman volume export claude-thoughts_qdrant-data > backup.tar`
 
 ## Stopping
 

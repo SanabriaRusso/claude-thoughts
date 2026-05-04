@@ -17,6 +17,19 @@ if ! curl -sf http://localhost:6333/healthz > /dev/null 2>&1; then
 fi
 
 touch "$MARKER"
+
+# Fire-and-forget snapshot of all Qdrant collections (opt out: QDRANT_SNAPSHOTS_ENABLED=0).
+# Detach with setsid+nohup so the snapshot survives if Claude Code reaps this hook's process group.
+SNAPSHOT_SCRIPT="$(dirname "$0")/snapshot-qdrant.sh"
+if [ -x "$SNAPSHOT_SCRIPT" ]; then
+  if command -v setsid >/dev/null 2>&1; then
+    setsid nohup "$SNAPSHOT_SCRIPT" </dev/null >/dev/null 2>&1 &
+  else
+    nohup "$SNAPSHOT_SCRIPT" </dev/null >/dev/null 2>&1 &
+  fi
+  disown 2>/dev/null || true
+fi
+
 cat << 'EOF'
 [claude-memory] MANDATORY: Before ending this session, you MUST call mcp__claude-memory__qdrant-store for EACH of the following that applies:
 - Architecture decisions made or discussed

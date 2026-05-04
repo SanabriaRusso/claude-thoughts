@@ -12,4 +12,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY ingest.py .
 
-ENTRYPOINT ["python", "-W", "ignore::UserWarning", "ingest.py"]
+ENTRYPOINT ["python", "-u", "-W", "ignore::UserWarning", "ingest.py"]
