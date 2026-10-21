@@ -17,6 +17,12 @@
 
 QDRANT_URL="${QDRANT_URL:-http://localhost:6333}"
 COLLECTION="${COLLECTION_NAME:-claude-memory}"
+MARKER_DIR="${CLAUDE_MEMORY_MARKER_DIR:-/tmp}"
+
+# session_id lets a clean sweep mark this session as "stored" for the Stop hook.
+# Empty when run by hand (</dev/null), e.g. from the wrap-session skill.
+INPUT=$(cat)
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 
 # Skip silently if the toolchain isn't there — never block a store on our own deps.
 command -v curl >/dev/null 2>&1 || exit 0
@@ -40,6 +46,7 @@ FILTER='{"filter":{"should":[
 # store silently unverified, so it must be loud rather than swallowed.
 RESP=$(curl -sf "$QDRANT_URL/collections/$COLLECTION/points/scroll" \
   -H 'Content-Type: application/json' -d "$FILTER")
+# shellcheck disable=SC2181
 if [ $? -ne 0 ]; then
   echo "[claude-memory] post-store verify hook: Qdrant is up but scrolling collection '$COLLECTION' failed. It may be missing or renamed — the store was NOT verified. Check: curl -s $QDRANT_URL/collections/$COLLECTION" >&2
   exit 2
@@ -65,7 +72,10 @@ if [ $PARSE_RC -ne 0 ]; then
   exit 2
 fi
 
-[ -z "$REPORT" ] && exit 0
+if [ -z "$REPORT" ]; then
+  [ -n "$SESSION_ID" ] && touch "$MARKER_DIR/.claude-memory-stored-$SESSION_ID" 2>/dev/null
+  exit 0
+fi
 COUNT=$(printf '%s\n' "$REPORT" | wc -l | tr -d ' ')
 
 cat >&2 << EOF
