@@ -7,9 +7,11 @@ IMPORTANT: You MUST use `mcp__claude-memory__qdrant-store` to persist knowledge 
 - Use findings to inform your approach and avoid repeating past mistakes
 
 ### Before ending ANY session
-**Canonical path: the user runs `/wrap-session`** — that skill surveys the conversation, dedupes against existing memories, and stores each high-signal item with the correct metadata. If the user has invoked `/wrap-session` in this session, you do not need to additionally call `mcp__claude-memory__qdrant-store` manually.
+**Canonical path: the user says the session is ending ("let's wrap the session", "done for today") or runs `/wrap-session`.** The skill surveys the conversation, dedupes against existing memories by point ID, supersedes stale ones, and stores each high-signal item with verified metadata. Claude may run it in a fork subagent; an agent without the conversation passes a digest as the argument. Once it has run, no manual `mcp__claude-memory__qdrant-store` calls are needed.
 
-If `/wrap-session` was NOT run (e.g. you receive the Stop hook directly), you MUST still call `mcp__claude-memory__qdrant-store` for each of the following that apply:
+Hooks nudge, they do not store: UserPromptSubmit flags a session-end phrase, and Stop blocks once per such signal if nothing was stored since. When the Stop hook blocks, run `/wrap-session`; if the user did not mean to end the session, say so and finish.
+
+What the skill looks for:
 - Architecture decisions made or discussed
 - Gotchas, bugs, or non-obvious behaviors discovered
 - Lessons learned from corrections or failed approaches
@@ -17,8 +19,8 @@ If `/wrap-session` was NOT run (e.g. you receive the Stop hook directly), you MU
 - Project context that would help future sessions
 
 ### Storage format
-- Always include metadata: `{"repo": "<project-name>", "topic": "<area>"}`
-- Write memories as standalone facts (future sessions have no conversation context)
+- Always include metadata: `{"repo": "<project-name>", "topic": "<area>", "category": "decision|gotcha|lesson|integration|context"}`
+- Write memories as standalone facts (future sessions have no conversation context), fact-first: only the first ~350 characters are embedded and searchable
 - One memory per distinct topic — don't bundle unrelated things
 
 ### If nothing worth storing

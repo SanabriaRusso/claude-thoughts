@@ -190,26 +190,39 @@ downloaded again.
 
 ## `/wrap-session` skill
 
-The Stop hook emits a *reminder* to store memories before quitting, but reminders are best-effort — Claude may have already decided to stop by the time the hook fires, and the structure/metadata of what gets stored varies session-to-session.
+Persists this session's high-signal knowledge (decisions, gotchas, lessons, cross-repo integration points, standing context) to the cross-repo `claude-memory` collection. Three ways to trigger it:
 
-`/wrap-session` is the deterministic, user-triggered counterpart. Invoke it explicitly **before quitting** any session in any repo:
+- **Say the session is ending** — "let's wrap the session", "done for today", "signing off". The UserPromptSubmit hook nudges Claude, and the skill is model-invocable, so Claude runs it, or delegates it to a fork subagent that inherits the conversation.
+- **Type `/wrap-session`** yourself.
+- **From an agent without the conversation** — `/wrap-session <digest>`; the digest is surveyed in place of the conversation.
 
-```
-/wrap-session
-```
+What happens (`skills/wrap-session/SKILL.md` drives `scripts/memory.py`):
 
-What it does:
-1. Detects the current repo via `git rev-parse --show-toplevel` and uses the basename as the `repo` tag.
-2. Verifies Qdrant is reachable (aborts with a clear message if not — memsearch still captures locally).
-3. Surveys the conversation for architecture decisions, gotchas, lessons, integration points, and standing project context.
-4. Deduplicates each candidate against existing memories via `mcp__claude-memory__qdrant-find`.
-5. Stores each kept item via `mcp__claude-memory__qdrant-store` with mandatory `{repo, topic}` metadata.
-6. Falls back to a single session-summary memory if nothing high-signal happened.
-7. Reports a compact summary table of what was stored and what was skipped as duplicate.
+1. **Preflight** (`memory.sh preflight`): repo name from `git rev-parse --git-common-dir` (correct inside worktrees), Qdrant health, collection and vector check, point counts, today's memsearch capture, a scratch `workdir`.
+2. **Survey**: the conversation, the caller's digest, today's `.memsearch/memory/<date>.md` (the per-turn record, which survives context compaction), `tasks/lessons.md`.
+3. **Draft** `candidates.json` with `{information, metadata: {repo, topic, category, related_repos?, pr?, supersedes?}}`. Unknown metadata keys are rejected.
+4. **Check** (`memory.sh check`): schema, secret scan, the exact indexed prefix, and the nearest existing memories with point IDs and scores — `DUPLICATE` at ≥ 0.90, `OVERLAP` at ≥ 0.70. Claude drops duplicates or lists what the new memory supersedes.
+5. **Store** (`memory.sh store`): re-validates, embeds with the same MiniLM model the MCP server uses, upserts, reads every point back, deletes superseded points only after that, sweeps for null metadata, writes a receipt, marks the session as stored.
+6. **Final sweep** with `post-qdrant-store-verify.sh`, the report table, "Session wrapped. Safe to quit."
 
-The skill ships in this repo at `skills/wrap-session/SKILL.md` and is installed as a snapshot to `~/.claude/skills/wrap-session/` whenever Qdrant is enabled. Re-run `./switch-backend.sh enable qdrant` after editing the skill to refresh the deployed copy.
+Why a script: the MCP find tool returns no point IDs and cannot filter by repo, so dedup used to be ID-less and supersession text-only (stale and current memories surfaced together). And the embedder reads only the **first 128 tokens (≈350 characters)** of a memory — everything after that is stored but never searched — so `check` shows exactly what will be searchable and the skill insists on fact-first memories. `memory.sh` runs on the interpreter of the `mcp-server-qdrant` uv tool install: no new dependency, never uvx, and it works even when the MCP tools failed to register at session start.
 
-The Stop-hook reminder remains active as a fallback for sessions where you forget to run `/wrap-session`.
+Tests: `bash skills/wrap-session/tests/run.sh` (throwaway collection on the live Qdrant; it refuses to touch `claude-memory` and asserts the live point count is unchanged).
+
+The skill is installed as a snapshot to `~/.claude/skills/wrap-session/` by `./switch-backend.sh enable qdrant`. Re-run that after editing it.
+
+### Hooks
+
+Installed to `~/.claude/hooks/` and wired into `~/.claude/settings.json` by `enable qdrant`; removed by `disable qdrant`.
+
+| Hook | Event | What it does |
+|---|---|---|
+| `session-start-memory.sh` | SessionStart | Health-checks Qdrant, auto-recovers the container, reminds Claude to search |
+| `user-prompt-wrap-intent.sh` | UserPromptSubmit | Detects session-end phrases, arms the Stop check, nudges Claude to run `/wrap-session` |
+| `session-stop-memory.sh` | Stop | Snapshots Qdrant once per session; blocks once per session-end signal if nothing was stored since |
+| `post-qdrant-store-verify.sh` | PostToolUse on `qdrant-store` | Detects stores that stranded their metadata; marks the session as stored |
+
+Hooks nudge, they never store. Markers live in `/tmp/.claude-memory-*` (override with `CLAUDE_MEMORY_MARKER_DIR`) and are pruned after 7 days. Hook config is snapshotted when a session starts, so changes apply to the next session. Tests: `bash qdrant/hooks/tests/run.sh` and `bash tests/switch-backend-hooks.sh`.
 
 ## Worktree support
 
@@ -240,7 +253,8 @@ both/
   CLAUDE-memory.md          Memory section for dual mode (injected into CLAUDE.md)
 qdrant/
   compose.yaml              Podman compose for Qdrant v1.17.1
-  hooks/                    Session hooks (copied to ~/.claude/hooks/ on activation)
+  hooks/                    SessionStart, UserPromptSubmit, Stop and PostToolUse hooks (copied to ~/.claude/hooks/ on activation)
+  hooks/tests/run.sh        Hook tests (JSON on stdin, temp marker dir)
   CLAUDE-memory.md          Memory section for Qdrant-only mode
   README.md                 Qdrant setup guide
 memsearch/
@@ -250,7 +264,12 @@ memsearch/
   README.md                 memsearch setup guide
 skills/
   wrap-session/
-    SKILL.md                User-invocable /wrap-session — persists high-signal items to Qdrant before quitting (deployed to ~/.claude/skills/ when Qdrant is enabled)
+    SKILL.md                /wrap-session — model- and user-invocable; persists high-signal items to Qdrant before quitting (deployed to ~/.claude/skills/ when Qdrant is enabled)
+    scripts/memory.py       preflight | check | store — repo detection, dedup with point IDs, secret scan, verified stores, supersession
+    scripts/memory.sh       Runs memory.py on the mcp-server-qdrant uv tool interpreter
+    tests/run.sh            End-to-end tests against a throwaway collection
+tests/
+  switch-backend-hooks.sh   Hook wiring test for switch-backend.sh (temp HOME)
 rag/
   ingest                    CLI wrapper (containerized ingestion)
   ingest.py                 Ingestion pipeline (runs inside container)
@@ -267,10 +286,11 @@ rag/
 |------|-------------|
 | `~/.claude/CLAUDE.md` | Memory section between `<!-- MEMORY-BACKEND-START/END -->` markers |
 | `~/.claude/CLAUDE.md` | RAG section between `<!-- RAG-BACKEND-START/END -->` markers |
-| `~/.claude/settings.json` | Qdrant hook entries under `.hooks.SessionStart` and `.hooks.Stop` |
-| `~/.claude/hooks/session-{start,stop}-memory.sh` | Copied from `qdrant/hooks/` when Qdrant is enabled |
+| `~/.claude/settings.json` | Qdrant hook entries under `.hooks.SessionStart`, `.hooks.UserPromptSubmit`, `.hooks.Stop` and `.hooks.PostToolUse` |
+| `~/.claude/hooks/{session-start-memory,user-prompt-wrap-intent,session-stop-memory,post-qdrant-store-verify,snapshot-qdrant}.sh` | Copied from `qdrant/hooks/` when Qdrant is enabled |
+| `/tmp/.claude-memory-*` | Hook marker files (snapshot, wrap-intent, wrap-blocked, stored), pruned after 7 days; override the directory with `CLAUDE_MEMORY_MARKER_DIR` |
 | `~/.claude/hooks/session-start-memsearch-worktree.sh` | Copied from `memsearch/hooks/` when memsearch is enabled |
 | `~/.claude/skills/wrap-session/` | Snapshot of `skills/wrap-session/` copied here when Qdrant is enabled |
 | `~/.claude.json` | `claude-rag` MCP server entry (when RAG is enabled); `claude-memory`/`claude-rag` entries launched via uvx/npx are repointed at the installed binary on `enable` |
-| `~/.local/bin/mcp-server-qdrant` | Installed with `uv tool install` on `enable qdrant` (only if migrating a uvx/npx entry) or `enable rag` |
+| `~/.local/bin/mcp-server-qdrant` | Installed with `uv tool install` on `enable qdrant` and `enable rag`; its Python environment also runs the wrap-session scripts |
 | memsearch plugin state | Toggled via `claude plugin enable/disable` |

@@ -5,9 +5,12 @@ Self-hosted semantic memory for Claude Code using Qdrant + the official MCP serv
 ## How it works
 
 Claude Code stores and retrieves context (architecture decisions, cross-repo knowledge,
-progress notes) in a local Qdrant vector DB via MCP. Session hooks automate the workflow:
-SessionStart checks/recovers Qdrant and reminds Claude to search; Stop enforces memory
-storage before the session ends.
+progress notes) in a local Qdrant vector DB via MCP. Four hooks automate the workflow:
+SessionStart checks/recovers Qdrant and reminds Claude to search; UserPromptSubmit detects
+session-end phrases and nudges Claude to run `/wrap-session`; Stop snapshots the data once
+per session and blocks once per session-end signal if nothing was stored; PostToolUse
+verifies every `qdrant-store` call landed its metadata. The `/wrap-session` skill (see the
+root README) is the canonical store path. Hook tests: `bash qdrant/hooks/tests/run.sh`.
 
 ## Setup
 
@@ -63,10 +66,10 @@ Edit `~/.claude.json` and add env vars to the `claude-memory` entry:
 From the repo root:
 
 ```bash
-./switch-backend.sh qdrant
+./switch-backend.sh enable qdrant
 ```
 
-This installs the session hooks and patches `~/.claude/CLAUDE.md` with Qdrant-specific instructions.
+This installs the four hooks, the `/wrap-session` skill, the `mcp-server-qdrant` uv tool, and patches `~/.claude/CLAUDE.md` with Qdrant-specific instructions.
 
 ### 4. Use it
 
@@ -85,7 +88,7 @@ In any Claude Code session:
 ### Snapshots
 
 The Stop hook automatically dumps every collection to `~/qdrant-dumps/claude-memory-<TS>/`
-after each session, keeping the 3 most recent runs. This protects against podman machine
+once per session (at its first Stop), keeping the 3 most recent runs. This protects against podman machine
 resets that would otherwise wipe `qdrant-data`.
 
 - **Opt out**: `export QDRANT_SNAPSHOTS_ENABLED=0`
