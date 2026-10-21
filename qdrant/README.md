@@ -22,11 +22,21 @@ Verify: http://localhost:6333/dashboard
 
 ### 2. Configure MCP server
 
+Install the server as a uv tool, then register it by absolute path:
+
 ```bash
+uv tool install --python 3.13 mcp-server-qdrant
 claude mcp add claude-memory \
   --scope user \
-  -- npx -y mcp-server-qdrant@latest
+  -- "$(uv tool dir --bin)/mcp-server-qdrant"
 ```
+
+> Don't launch it with `uvx` (or `npx`). Every Claude session would start it through
+> uvx, which leaves a ~400 MB environment in `~/.cache/uv` whenever a dependency
+> changes and holds the uv cache lock while it runs. See
+> [Disk usage](../README.md#disk-usage-keep-uvx-off-the-hot-path). The absolute path
+> matters because Claude Code may not have `~/.local/bin` on its `PATH`.
+> `./switch-backend.sh enable qdrant` rewrites an existing uvx/npx entry for you.
 
 Edit `~/.claude.json` and add env vars to the `claude-memory` entry:
 
@@ -34,8 +44,8 @@ Edit `~/.claude.json` and add env vars to the `claude-memory` entry:
 {
   "mcpServers": {
     "claude-memory": {
-      "command": "npx",
-      "args": ["-y", "mcp-server-qdrant@latest"],
+      "command": "/Users/<you>/.local/bin/mcp-server-qdrant",
+      "args": [],
       "env": {
         "QDRANT_URL": "http://localhost:6333",
         "COLLECTION_NAME": "claude-memory",

@@ -111,7 +111,7 @@ All processing runs locally inside a Podman container. No external queries are m
 | Vector database | Qdrant v1.17.1 | Podman container | ~100 MB image |
 | Contextualization | Ollama (any local model, default `gemma3:4b`) | Host process | Varies |
 | Ingestion CLI | Python 3.13 + deps | Podman container | ~600 MB image |
-| MCP retrieval | `mcp-server-qdrant` via uvx | Subprocess | ~30 MB |
+| MCP retrieval | `mcp-server-qdrant` (`uv tool install`ed; not uvx, see [Disk usage](../README.md#disk-usage-keep-uvx-off-the-hot-path)) | Subprocess | ~30 MB |
 
 No API keys. No cloud services. No data leaves your machine.
 
