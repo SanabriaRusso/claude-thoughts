@@ -140,13 +140,19 @@ install_qdrant_hooks() {
   cp "$REPO_DIR/qdrant/hooks/session-start-memory.sh" "$HOME/.claude/hooks/"
   cp "$REPO_DIR/qdrant/hooks/session-stop-memory.sh" "$HOME/.claude/hooks/"
   cp "$REPO_DIR/qdrant/hooks/snapshot-qdrant.sh" "$HOME/.claude/hooks/"
+  cp "$REPO_DIR/qdrant/hooks/post-qdrant-store-verify.sh" "$HOME/.claude/hooks/"
+  cp "$REPO_DIR/qdrant/hooks/user-prompt-wrap-intent.sh" "$HOME/.claude/hooks/"
   chmod +x "$HOME/.claude/hooks/session-start-memory.sh"
   chmod +x "$HOME/.claude/hooks/session-stop-memory.sh"
   chmod +x "$HOME/.claude/hooks/snapshot-qdrant.sh"
+  chmod +x "$HOME/.claude/hooks/post-qdrant-store-verify.sh"
+  chmod +x "$HOME/.claude/hooks/user-prompt-wrap-intent.sh"
 
-  local has_start has_stop
+  local has_start has_stop has_verify has_intent
   has_start=$(jq -r '.hooks.SessionStart // [] | map(.hooks[]?.command) | any(. == "~/.claude/hooks/session-start-memory.sh")' "$SETTINGS" 2>/dev/null || echo "false")
   has_stop=$(jq -r '.hooks.Stop // [] | map(.hooks[]?.command) | any(. == "~/.claude/hooks/session-stop-memory.sh")' "$SETTINGS" 2>/dev/null || echo "false")
+  has_verify=$(jq -r '.hooks.PostToolUse // [] | map(.hooks[]?.command) | any(. == "~/.claude/hooks/post-qdrant-store-verify.sh")' "$SETTINGS" 2>/dev/null || echo "false")
+  has_intent=$(jq -r '.hooks.UserPromptSubmit // [] | map(.hooks[]?.command) | any(. == "~/.claude/hooks/user-prompt-wrap-intent.sh")' "$SETTINGS" 2>/dev/null || echo "false")
 
   if [ "$has_start" != "true" ]; then
     jq '.hooks.SessionStart = (.hooks.SessionStart // []) + [{"hooks": [{"type": "command", "command": "~/.claude/hooks/session-start-memory.sh", "timeout": 15}]}]' \
@@ -155,6 +161,16 @@ install_qdrant_hooks() {
 
   if [ "$has_stop" != "true" ]; then
     jq '.hooks.Stop = (.hooks.Stop // []) + [{"hooks": [{"type": "command", "command": "~/.claude/hooks/session-stop-memory.sh", "timeout": 5}]}]' \
+      "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"
+  fi
+
+  if [ "$has_verify" != "true" ]; then
+    jq '.hooks.PostToolUse = (.hooks.PostToolUse // []) + [{"matcher": "mcp__claude-memory__qdrant-store", "hooks": [{"type": "command", "command": "~/.claude/hooks/post-qdrant-store-verify.sh", "timeout": 10}]}]' \
+      "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"
+  fi
+
+  if [ "$has_intent" != "true" ]; then
+    jq '.hooks.UserPromptSubmit = (.hooks.UserPromptSubmit // []) + [{"hooks": [{"type": "command", "command": "~/.claude/hooks/user-prompt-wrap-intent.sh", "timeout": 5}]}]' \
       "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"
   fi
 
@@ -169,8 +185,12 @@ remove_qdrant_hooks() {
   jq '
     .hooks.SessionStart = [.hooks.SessionStart[]? | select(.hooks | all(.command != "~/.claude/hooks/session-start-memory.sh"))] |
     .hooks.Stop = [.hooks.Stop[]? | select(.hooks | all(.command != "~/.claude/hooks/session-stop-memory.sh"))] |
+    .hooks.PostToolUse = [.hooks.PostToolUse[]? | select(.hooks | all(.command != "~/.claude/hooks/post-qdrant-store-verify.sh"))] |
+    .hooks.UserPromptSubmit = [.hooks.UserPromptSubmit[]? | select(.hooks | all(.command != "~/.claude/hooks/user-prompt-wrap-intent.sh"))] |
     if (.hooks.SessionStart | length) == 0 then del(.hooks.SessionStart) else . end |
     if (.hooks.Stop | length) == 0 then del(.hooks.Stop) else . end |
+    if (.hooks.PostToolUse | length) == 0 then del(.hooks.PostToolUse) else . end |
+    if (.hooks.UserPromptSubmit | length) == 0 then del(.hooks.UserPromptSubmit) else . end |
     if (.hooks | length) == 0 then del(.hooks) else . end
   ' "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"
 
@@ -189,6 +209,9 @@ install_wrap_session_skill() {
   mkdir -p "$HOME/.claude/skills"
   rm -rf "$dest"
   cp -R "$src" "$dest"
+  if [ -d "$dest/scripts" ]; then
+    find "$dest/scripts" -maxdepth 1 -type f -name '*.sh' -exec chmod +x {} +
+  fi
   echo "  wrap-session skill installed (snapshot)."
 }
 
@@ -427,6 +450,24 @@ show_status() {
     else
       echo "    wrap-session skill: MISSING (re-run: $0 enable qdrant)"
     fi
+    local entry event hook
+    for entry in SessionStart:session-start-memory Stop:session-stop-memory \
+                 PostToolUse:post-qdrant-store-verify UserPromptSubmit:user-prompt-wrap-intent; do
+      event="${entry%%:*}"
+      hook="${entry#*:}"
+      if [ -f "$HOME/.claude/hooks/$hook.sh" ] && \
+         jq -e --arg event "$event" --arg hook "$hook" \
+           '.hooks[$event] // [] | map(.hooks[]?.command) | any(. == "~/.claude/hooks/\($hook).sh")' "$SETTINGS" >/dev/null 2>&1; then
+        echo "    hook $hook: installed"
+      else
+        echo "    hook $hook: MISSING (re-run: $0 enable qdrant)"
+      fi
+    done
+    if [ -x "$HOME/.local/share/uv/tools/mcp-server-qdrant/bin/python" ]; then
+      echo "    wrap-session interpreter: ok"
+    else
+      echo "    wrap-session interpreter: MISSING (re-run: $0 enable qdrant)"
+    fi
   else
     echo "  qdrant:    OFF"
   fi
@@ -475,6 +516,9 @@ case "$ACTION" in
     case "$BACKEND" in
       qdrant)
         echo "[memory] Enabling Qdrant..."
+        # First, so a missing uv aborts before anything is changed. The
+        # wrap-session skill runs on this tool's Python interpreter.
+        ensure_qdrant_mcp_binary
         install_qdrant_hooks
         install_wrap_session_skill
         migrate_qdrant_mcp "claude-memory"
