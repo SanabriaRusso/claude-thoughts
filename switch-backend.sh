@@ -315,6 +315,48 @@ clear_rag_section() {
   } > "${CLAUDE_MD}.tmp" && mv "${CLAUDE_MD}.tmp" "$CLAUDE_MD"
 }
 
+# ─── Qdrant MCP binary ──────────────────────────────────────────────────────
+#
+# The Qdrant MCP servers run from a `uv tool install`ed binary, never from uvx.
+# uvx builds a ~400 MB throwaway env in ~/.cache/uv/archive-v0 whenever a
+# dependency changes and never deletes the old one; each running uvx process
+# also holds the uv cache lock, so `uv cache prune` can't run while Claude
+# sessions are open. See "Disk usage" in README.md.
+
+qdrant_mcp_bin() {
+  echo "$(uv tool dir --bin)/mcp-server-qdrant"
+}
+
+ensure_qdrant_mcp_binary() {
+  if ! command -v uv &>/dev/null; then
+    echo "  ERROR: uv is required to install mcp-server-qdrant."
+    echo "  Install uv: curl -LsSf https://astral.sh/uv/install.sh | sh"
+    exit 1
+  fi
+  if [ ! -x "$(qdrant_mcp_bin)" ]; then
+    echo "  Installing mcp-server-qdrant as a uv tool..."
+    uv tool install --python 3.13 mcp-server-qdrant
+  fi
+}
+
+# Exit 0 if the named MCP server is launched through uvx or npx.
+mcp_uses_ephemeral_runner() {
+  [ -f "$CLAUDE_JSON" ] && \
+  jq -e --arg name "$1" '.mcpServers[$name].command // "" | test("(^|/)(uvx|npx)$")' "$CLAUDE_JSON" >/dev/null 2>&1
+}
+
+# Point an existing uvx/npx-launched Qdrant MCP entry at the installed binary.
+# Leaves env untouched.
+migrate_qdrant_mcp() {
+  local name="$1"
+  mcp_uses_ephemeral_runner "$name" || return 0
+  ensure_qdrant_mcp_binary
+  jq --arg name "$name" --arg bin "$(qdrant_mcp_bin)" \
+    '.mcpServers[$name].command = $bin | .mcpServers[$name].args = []' \
+    "$CLAUDE_JSON" > "${CLAUDE_JSON}.tmp" && mv "${CLAUDE_JSON}.tmp" "$CLAUDE_JSON"
+  echo "  $name MCP server now runs $(qdrant_mcp_bin) (was uvx/npx)."
+}
+
 install_rag_mcp() {
   if [ ! -f "$CLAUDE_JSON" ]; then
     echo '{}' > "$CLAUDE_JSON"
@@ -323,11 +365,14 @@ install_rag_mcp() {
   local has_rag
   has_rag=$(jq -r '.mcpServers["claude-rag"] // empty' "$CLAUDE_JSON" 2>/dev/null)
 
-  if [ -z "$has_rag" ]; then
-    jq '.mcpServers["claude-rag"] = {
+  if [ -n "$has_rag" ]; then
+    migrate_qdrant_mcp "claude-rag"
+  else
+    ensure_qdrant_mcp_binary
+    jq --arg bin "$(qdrant_mcp_bin)" '.mcpServers["claude-rag"] = {
       "type": "stdio",
-      "command": "uvx",
-      "args": ["--python", "3.13", "mcp-server-qdrant"],
+      "command": $bin,
+      "args": [],
       "env": {
         "QDRANT_URL": "http://localhost:6333",
         "COLLECTION_NAME": "claude-rag",
@@ -396,6 +441,26 @@ show_status() {
     echo "  rag:       OFF"
   fi
   echo ""
+  show_disk_warnings
+}
+
+# Setups that fill ~/.cache/uv/archive-v0 (see "Disk usage" in README.md).
+show_disk_warnings() {
+  local name
+  for name in claude-memory claude-rag; do
+    if mcp_uses_ephemeral_runner "$name"; then
+      echo "  WARNING: $name MCP server is launched via uvx/npx — this fills ~/.cache/uv."
+      case "$name" in
+        claude-memory) echo "           Fix: $0 enable qdrant" ;;
+        claude-rag)    echo "           Fix: $0 enable rag" ;;
+      esac
+    fi
+  done
+  if is_memsearch_enabled && ! command -v memsearch &>/dev/null; then
+    echo "  WARNING: memsearch is not on PATH — the plugin falls back to"
+    echo "           'uvx --upgrade', which fills ~/.cache/uv."
+    echo "           Fix: uv tool install \"memsearch[onnx]\""
+  fi
 }
 
 # ─── Main ───────────────────────────────────────────────────────────────────
@@ -412,6 +477,7 @@ case "$ACTION" in
         echo "[memory] Enabling Qdrant..."
         install_qdrant_hooks
         install_wrap_session_skill
+        migrate_qdrant_mcp "claude-memory"
         # Determine memsearch state for CLAUDE.md
         if is_memsearch_enabled; then
           patch_claude_md "true" "true"

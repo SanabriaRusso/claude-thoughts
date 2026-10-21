@@ -143,6 +143,51 @@ The switch script manages per backend:
 
 Restart Claude Code after switching.
 
+## Disk usage: keep uvx off the hot path
+
+Every Python component here (memsearch, the `claude-memory` and `claude-rag` MCP servers)
+must run from an installed binary, never through `uvx`. Otherwise `~/.cache/uv/archive-v0`
+grows without bound: one machine reached 160 GB and filled its disk.
+
+**Why it grows.** Each `uvx` run uses a cached environment. When a dependency changes,
+uvx builds a new one (~400 MB for these packages) and keeps the old one. Two things here
+run through uvx unless you prevent it:
+
+- **memsearch hooks** look for `memsearch` on `PATH`. If it isn't there, they fall back to
+  `uvx --upgrade --from 'memsearch[onnx]' memsearch`, which re-resolves on every session start.
+- **Qdrant MCP servers** registered as `uvx mcp-server-qdrant` start two uvx processes
+  per Claude session.
+
+**Why you can't just prune.** A running `uvx` process holds `~/.cache/uv/.lock` for its whole
+lifetime. While any Claude session has a uvx-launched MCP server open, `uv cache prune`
+waits 300 s and then fails with `Timeout ... waiting for lock`.
+
+**Check:**
+
+```bash
+./switch-backend.sh status        # warns about uvx/npx MCP entries and memsearch missing from PATH
+du -sh ~/.cache/uv/archive-v0
+lsof ~/.cache/uv/.lock            # which processes hold the cache lock
+```
+
+**Fix:**
+
+```bash
+uv tool install "memsearch[onnx]"             # memsearch/setup.sh does this
+./switch-backend.sh enable qdrant             # rewrites a uvx/npx claude-memory entry
+./switch-backend.sh enable rag                # rewrites a uvx/npx claude-rag entry
+```
+
+Both `enable` commands install `mcp-server-qdrant` as a uv tool and point the MCP entry at
+its absolute path. They leave the entry's `env` untouched.
+
+**Reclaim space:** restart every Claude session started before the fix so the old uvx
+processes exit, then run `uv cache prune`. It removes only unreferenced entries.
+`uv cache prune --force` skips the lock check, but it can delete environments that
+still-running old sessions use; reconnect those with `/mcp`. `uv cache clean` wipes the
+whole cache. That is safe for project venvs and `uv tool` installs, but everything gets
+downloaded again.
+
 ## `/wrap-session` skill
 
 The Stop hook emits a *reminder* to store memories before quitting, but reminders are best-effort — Claude may have already decided to stop by the time the hook fires, and the structure/metadata of what gets stored varies session-to-session.
@@ -226,5 +271,6 @@ rag/
 | `~/.claude/hooks/session-{start,stop}-memory.sh` | Copied from `qdrant/hooks/` when Qdrant is enabled |
 | `~/.claude/hooks/session-start-memsearch-worktree.sh` | Copied from `memsearch/hooks/` when memsearch is enabled |
 | `~/.claude/skills/wrap-session/` | Snapshot of `skills/wrap-session/` copied here when Qdrant is enabled |
-| `~/.claude.json` | `claude-rag` MCP server entry (when RAG is enabled) |
+| `~/.claude.json` | `claude-rag` MCP server entry (when RAG is enabled); `claude-memory`/`claude-rag` entries launched via uvx/npx are repointed at the installed binary on `enable` |
+| `~/.local/bin/mcp-server-qdrant` | Installed with `uv tool install` on `enable qdrant` (only if migrating a uvx/npx entry) or `enable rag` |
 | memsearch plugin state | Toggled via `claude plugin enable/disable` |

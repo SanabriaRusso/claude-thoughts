@@ -39,6 +39,8 @@ If the setup script doesn't work for your environment:
 pip install "memsearch[onnx]"
 # or: pipx install "memsearch[onnx]"
 # or: uv tool install "memsearch[onnx]"
+# Whichever you use, `memsearch` must end up on PATH. Otherwise the plugin
+# falls back to `uvx --upgrade` and fills ~/.cache/uv (see "Disk usage" in ../README.md).
 
 # 2. Configure ONNX embeddings
 memsearch config set embedding.provider onnx
